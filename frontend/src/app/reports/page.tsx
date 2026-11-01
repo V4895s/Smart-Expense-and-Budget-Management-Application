@@ -1,6 +1,7 @@
 
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import {
@@ -187,7 +188,14 @@ export default function ReportsPage() {
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/"
+              className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              ← Back to Dashboard
+            </Link>
+
             <label className="sr-only" htmlFor="report-period">
               Reporting period
             </label>

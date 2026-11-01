@@ -1,358 +1,308 @@
 
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import SignOutButton from "@/components/SignOutButton";
 
-const transactions = [
-  {
-    name: "Salary",
-    category: "Income",
-    date: "Oct 26, 2026",
-    amount: 45000,
-    type: "income",
-  },
-  {
-    name: "Groceries",
-    category: "Food",
-    date: "Oct 25, 2026",
-    amount: 1250,
-    type: "expense",
-  },
-  {
-    name: "Electricity Bill",
-    category: "Utilities",
-    date: "Oct 24, 2026",
-    amount: 1800,
-    type: "expense",
-  },
-  {
-    name: "Freelance Work",
-    category: "Income",
-    date: "Oct 23, 2026",
-    amount: 6500,
-    type: "income",
-  },
-  {
-    name: "Restaurant",
-    category: "Food",
-    date: "Oct 22, 2026",
-    amount: 850,
-    type: "expense",
-  },
-];
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
-const budgets = [
-  {
-    name: "Food & Dining",
-    spent: 6500,
-    limit: 10000,
-    color: "#6366f1",
-  },
-  {
-    name: "Transport",
-    spent: 2400,
-    limit: 5000,
-    color: "#0d9488",
-  },
-  {
-    name: "Shopping",
-    spent: 4200,
-    limit: 6000,
-    color: "#f59e0b",
-  },
-];
+type Transaction = {
+  id: string;
+  type: "income" | "expense";
+  amount: number;
+};
 
-const money = (amount: number) =>
-  new Intl.NumberFormat("en-IN", {
+type Budget = {
+  id: string;
+  category_id: string;
+  amount: number;
+  period: "weekly" | "monthly";
+  spent: number;
+  remaining: number;
+};
+
+function formatMoney(amount: number) {
+  return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
-    maximumFractionDigits: 0,
+    maximumFractionDigits: 2,
   }).format(amount);
+}
 
 export default function Home() {
-  const [active, setActive] = useState("Dashboard");
-  const router = useRouter();
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [userName, setUserName] = useState("");
 
-  const links = [
-    ["▦", "Dashboard"],
-    ["⇄", "Transactions"],
-    ["◷", "Budgets"],
-    ["▥", "Reports"],
-    ["⚙", "Settings"],
+  const [availableBalance, setAvailableBalance] = useState(0);
+  const [remainingBudget, setRemainingBudget] = useState(0);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const loadDashboard = useCallback(async () => {
+    const token = localStorage.getItem("pennywise-access-token");
+
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError("");
+
+    
+      const headers = {
+        Authorization: `Bearer ${token}`,
+      };
+
+      const [transactionsResponse, budgetsResponse] =
+        await Promise.all([
+          fetch(`${API_URL}/transactions`, { headers }),
+          fetch(`${API_URL}/budgets`, { headers }),
+        ]);
+
+      if (!transactionsResponse.ok) {
+        throw new Error("Could not load transactions.");
+      }
+
+      if (!budgetsResponse.ok) {
+        throw new Error("Could not load budgets.");
+      }
+
+      const transactions: Transaction[] =
+        await transactionsResponse.json();
+
+      const budgets: Budget[] = await budgetsResponse.json();
+
+      const totalIncome = transactions
+        .filter((transaction) => transaction.type === "income")
+        .reduce(
+          (sum, transaction) => sum + Number(transaction.amount),
+          0
+        );
+
+      const totalExpenses = transactions
+        .filter((transaction) => transaction.type === "expense")
+        .reduce(
+          (sum, transaction) => sum + Number(transaction.amount),
+          0
+        );
+
+      // Keep only one budget per category.
+      // Monthly takes priority over weekly to avoid overlapping spending.
+      const budgetsByCategory = new Map<string, Budget>();
+
+      budgets.forEach((budget) => {
+        const existing = budgetsByCategory.get(budget.category_id);
+
+        if (
+          !existing ||
+          (budget.period === "monthly" && existing.period === "weekly")
+        ) {
+          budgetsByCategory.set(budget.category_id, budget);
+        }
+      });
+
+      const remaining = Array.from(budgetsByCategory.values()).reduce(
+        (sum, budget) => sum + Number(budget.remaining),
+        0
+      );
+
+      setAvailableBalance(totalIncome - totalExpenses);
+      setRemainingBudget(remaining);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong while loading dashboard data."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const token = localStorage.getItem("pennywise-access-token");
+    const status = localStorage.getItem("pennywise-logged-in");
+
+    if (token && status === "true") {
+      setLoggedIn(true);
+      setUserName(
+        localStorage.getItem("pennywise-user-name") || "User"
+      );
+      loadDashboard();
+    } else {
+      setLoading(false);
+    }
+  }, [loadDashboard]);
+
+  if (!loggedIn) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#f6f7fb] p-5">
+        <section className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm sm:p-10">
+          <p className="text-sm font-semibold uppercase tracking-[0.22em] text-indigo-600">
+            PennyWise
+          </p>
+
+          <h1 className="mt-4 text-3xl font-bold text-slate-900 sm:text-4xl">
+            Welcome to smart money management
+          </h1>
+
+          <p className="mt-3 text-sm text-slate-500 sm:text-base">
+            Please sign in to continue, or create a new account to get started.
+          </p>
+
+          <div className="mt-8 grid gap-3 sm:grid-cols-2">
+            <Link
+              href="/login"
+              className="rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-700"
+            >
+              Log in
+            </Link>
+
+            <Link
+              href="/register"
+              className="rounded-xl border border-indigo-200 bg-indigo-50 px-5 py-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-100"
+            >
+              Sign up
+            </Link>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  const sections = [
+    {
+      name: "Transactions",
+      description: "Manage your income and expenses",
+      href: "/transactions",
+    },
+    {
+      name: "Budgets",
+      description: "Track your spending limits",
+      href: "/budgets",
+    },
+    {
+      name: "Reports",
+      description: "Review your financial reports",
+      href: "/reports",
+    },
+    {
+      name: "Profile",
+      description: "Manage your account",
+      href: "/profile",
+    },
   ];
 
-  const totalIncome = transactions
-    .filter((t) => t.type === "income")
-    .reduce((sum, t) => sum + t.amount, 0);
-
-  const totalExpenses = transactions
-    .filter((t) => t.type === "expense")
-    .reduce((sum, t) => sum + t.amount, 0);
-
-  function handleNavigation(label: string) {
-    if (label === "Settings") {
-      router.push("/profile");
-      return;
-    }
-
-    if (label === "Transactions") {
-      router.push("/transactions");
-      return;
-    }
-
-    if (label === "Reports") {
-    router.push("/reports");
-    return;
-  }
-
-  if (label === "Settings") {
-    router.push("/profile");
-    return;
-  }
-
-
-    setActive(label);
-  }
-
   return (
-    <main className="min-h-screen bg-[#f6f7fb] text-slate-800 md:flex">
-      <aside className="flex w-full shrink-0 flex-col bg-white p-5 md:min-h-screen md:w-64 md:border-r md:border-slate-200">
-        <div className="mb-8 flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-600 text-xl font-bold text-white">
-            ₹
-          </div>
-        
+    <main className="min-h-screen bg-[#f6f7fb] p-6 sm:p-10">
+      <div className="mx-auto max-w-6xl">
+        <header className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-lg font-bold tracking-tight">PennyWise</h1>
-            <p className="text-xs text-slate-500">Smart money management</p>
-          </div>
-        </div>
-        
-        <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
-          Workspace
-        </p>
-        
-        <nav aria-label="Main navigation" className="flex gap-2 overflow-x-auto md:flex-col">
-          {links.map(([icon, label]) => (
-            <button
-              key={label}
-              type="button"
-              onClick={() => handleNavigation(label)}
-              aria-current={active === label ? "page" : undefined}
-              className={`flex min-w-fit items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium transition ${
-                active === label
-                  ? "bg-indigo-50 text-indigo-700"
-                  : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
-              }`}
-            >
-              <span className="text-lg" aria-hidden="true">
-                {icon}
-              </span>
-              {label}
-            </button>
-          ))}
-        </nav>
-        
-        <div className="mt-8 rounded-2xl bg-indigo-600 p-4 text-white">
-          <p className="text-sm font-semibold">Your money, your goals.</p>
-          <p className="mt-2 text-xs leading-5 text-indigo-100">
-            Track spending and build better financial habits, one day at a time.
-          </p>
-        </div>
-        
-        <div className="mt-auto pt-6">
-          <div className="flex justify-center">
-            <SignOutButton />
-          </div>
-        </div>
-      </aside>
-
-      <section className="min-w-0 flex-1 p-5 md:p-9">
-        <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="mb-1 text-sm text-slate-500">
-              Monday, October 26, 2026
+            <p className="text-sm font-semibold uppercase tracking-widest text-indigo-600">
+              PennyWise
             </p>
-
-            <h2 className="text-2xl font-bold tracking-tight md:text-3xl">
-              {active === "Dashboard"
-                ? "Your financial overview"
-                : active}
-            </h2>
-
-            <p className="mt-2 text-sm text-slate-500">
-              Here&apos;s how your money is looking.
+            <h1 className="mt-2 text-3xl font-bold text-slate-900">
+              Welcome, {userName}!
+            </h1>
+            <p className="mt-2 text-slate-500">
+              Your personal finance dashboard
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => router.push("/transactions")}
-            className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
-          >
-            + Add transaction
-          </button>
+          <SignOutButton />
         </header>
 
-        <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          <article className="rounded-2xl bg-indigo-600 p-6 text-white shadow-sm">
-            <p className="text-sm text-indigo-100">
-              Total balance
-            </p>
-            <p className="mt-3 text-3xl font-bold">
-              {money(82450)}
-            </p>
-            <p className="mt-3 text-xs text-indigo-100">
-              Your available balance
-            </p>
-          </article>
+        {/* Financial summary */}
+        <section className="mt-10">
+          <h2 className="text-xl font-semibold text-slate-900">
+            Financial overview
+          </h2>
 
-          <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <p className="text-sm text-slate-500">Total income</p>
-            <p className="mt-3 text-3xl font-bold text-emerald-600">
-              {money(totalIncome)}
-            </p>
-            <p className="mt-3 text-xs text-slate-400">
-              From sample transactions
-            </p>
-          </article>
-
-          <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <p className="text-sm text-slate-500">
-              Total expenses
-            </p>
-            <p className="mt-3 text-3xl font-bold text-rose-500">
-              {money(totalExpenses)}
-            </p>
-            <p className="mt-3 text-xs text-slate-400">
-              From sample transactions
-            </p>
-          </article>
-        </div>
-
-        <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-5 flex items-center justify-between">
-              <div>
-                <h3 className="font-bold">
-                  Recent transactions
-                </h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  Your latest money movements
-                </p>
-              </div>
-
+          {error && (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              {error}
               <button
-                type="button"
-                onClick={() => router.push("/transactions")}
-                className="text-sm font-semibold text-indigo-600 hover:text-indigo-800"
+                onClick={loadDashboard}
+                className="ml-2 font-semibold underline"
               >
-                View all
+                Retry
               </button>
             </div>
+          )}
 
-            <div className="space-y-5">
-              {transactions.map((t, i) => (
-                <div
-                  key={`${t.name}-${i}`}
-                  className="flex items-center justify-between gap-3"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div
-                      className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-lg ${
-                        t.type === "income"
-                          ? "bg-emerald-50 text-emerald-600"
-                          : "bg-slate-100 text-slate-600"
-                      }`}
-                    >
-                      {t.type === "income" ? "↙" : "↗"}
-                    </div>
+          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <p className="text-sm font-medium text-slate-500">
+                Available balance
+              </p>
 
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold">
-                        {t.name}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-400">
-                        {t.category} · {t.date}
-                      </p>
-                    </div>
-                  </div>
-
-                  <p
-                    className={`shrink-0 text-sm font-bold ${
-                      t.type === "income"
-                        ? "text-emerald-600"
-                        : "text-slate-800"
-                    }`}
-                  >
-                    {t.type === "income" ? "+" : "−"}
-                    {money(t.amount)}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-6">
-              <h3 className="font-bold">Monthly budgets</h3>
-              <p className="mt-1 text-xs text-slate-500">
-                Your spending against each limit
+              <p
+                className={`mt-3 text-2xl font-bold ${
+                  availableBalance < 0 ? "text-rose-600" : "text-slate-900"
+                }`}
+              >
+                {loading ? "Loading..." : formatMoney(availableBalance)}
+              </p>
+              
+              <p className="mt-2 text-sm text-slate-500">
+                Total income minus total expenses
               </p>
             </div>
-
-            <div className="space-y-7">
-              {budgets.map((b) => {
-                const percentage = Math.round(
-                  (b.spent / b.limit) * 100
-                );
-
-                return (
-                  <div key={b.name}>
-                    <div className="mb-2 flex justify-between gap-3 text-sm">
-                      <span className="font-medium">
-                        {b.name}
-                      </span>
-                      <span className="text-slate-500">
-                        {percentage}%
-                      </span>
-                    </div>
-
-                    <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                      <div
-                        className="h-full rounded-full"
-                        style={{
-                          width: `${percentage}%`,
-                          backgroundColor: b.color,
-                        }}
-                      />
-                    </div>
-
-                    <div className="mt-2 flex justify-between text-xs text-slate-500">
-                      <span>{money(b.spent)} spent</span>
-                      <span>Limit {money(b.limit)}</span>
-                    </div>
-                  </div>
-                );
-              })}
+              
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <p className="text-sm font-medium text-slate-500">
+                Remaining budget
+              </p>
+              
+              <p
+                className={`mt-3 text-2xl font-bold ${
+                  remainingBudget < 0 ? "text-rose-600" : "text-indigo-600"
+                }`}
+              >
+                {loading ? "Loading..." : formatMoney(remainingBudget)}
+              </p>
+              
+              <p className="mt-2 text-sm text-slate-500">
+                Based on your active category budgets
+              </p>
             </div>
+          </div>
+        </section>
 
-            <button
-              type="button"
-              onClick={() => router.push("/budgets")}
-              className="mt-7 w-full rounded-xl border border-slate-200 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              Manage budgets
-            </button>
-          </section>
-        </div>
+        {/* Workspace */}
+        <section className="mt-10">
+          <h2 className="text-xl font-semibold text-slate-900">
+            Your workspace
+          </h2>
 
-        <p className="mt-7 text-center text-xs text-slate-400">
-          PennyWise · Smart Expense &amp; Budget Management
-        </p>
-      </section>
+          <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            {sections.map((section) => (
+              <Link
+                key={section.href}
+                href={section.href}
+                className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-md"
+              >
+                <h3 className="text-lg font-semibold text-slate-900">
+                  {section.name}
+                </h3>
+
+                <p className="mt-2 text-sm text-slate-500">
+                  {section.description}
+                </p>
+
+                <p className="mt-5 text-sm font-semibold text-indigo-600">
+                  Open section →
+                </p>
+              </Link>
+            ))}
+          </div>
+        </section>
+      </div>
     </main>
   );
 }

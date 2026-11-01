@@ -1,0 +1,125 @@
+# PennyWise – Local Setup Instructions
+
+## 1. Get the latest project changes
+
+Open PowerShell and navigate to your project directory.
+
+### If you have already cloned the repository
+
+```powershell
+git switch main
+git pull origin main
+```
+
+### If you have not cloned the repository
+
+```powershell
+git clone https://github.com/virenfern/Smart-Expense-and-Budget-Management-Application.git
+cd Smart-Expense-and-Budget-Management-Application
+```
+
+## 2. Prerequisites
+
+Install the following:
+
+- Python 3.12
+- Node.js and npm
+- Git
+- VS Code (recommended)
+
+## 3. Backend setup
+
+Open a PowerShell terminal and navigate to the backend directory:
+
+```powershell
+cd backend
+```
+
+Create a virtual environment if one does not already exist:
+
+```powershell
+python -m venv .venv
+```
+
+Activate the virtual environment:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+Install the required dependencies:
+
+```powershell
+pip install -r requirements.txt
+```
+
+Create a `.env` file inside the `backend` directory using `.env.example` as a reference.
+
+Configure your own Supabase PostgreSQL connection details and all required environment variables. Do not commit or share database passwords, API keys, or secret keys.
+
+Start the backend server:
+
+```powershell
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Backend URL:
+
+http://127.0.0.1:8000
+
+API documentation:
+
+http://127.0.0.1:8000/docs
+
+## 4. Frontend setup
+
+Open a second PowerShell terminal and navigate to the frontend directory:
+
+```powershell
+cd frontend
+```
+
+Install the required packages:
+
+```powershell
+npm install
+```
+
+Create a `.env.local` file inside the `frontend` directory with the following configuration:
+
+```env
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+```
+
+Start the frontend development server:
+
+```powershell
+npm run dev
+```
+
+Frontend URL:
+
+http://localhost:3000
+
+## 5. Running the application
+
+Keep both terminal windows running:
+
+- **Terminal 1:** FastAPI backend running on port 8000.
+- **Terminal 2:** Next.js frontend running on port 3000.
+
+Open the following URL in your browser:
+
+http://localhost:3000
+
+You can use the application once both servers are running.
+
+## 6. Important notes
+
+- Start the backend before testing authentication and API-dependent features.
+- Each teammate must configure their own environment variables.
+- Never commit `.env`, `.env.local`, database credentials, or API secrets.
+- Do not commit `node_modules` or the Python `.venv` directory.
+- Pull the latest changes from the `main` branch before starting work.
+- Make sure your local `main` branch is up to date before creating a new feature branch.
+- Do not share your personal database credentials with other team members.

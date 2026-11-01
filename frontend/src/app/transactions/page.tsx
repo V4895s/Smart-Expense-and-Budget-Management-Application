@@ -1,11 +1,14 @@
 
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
 type Transaction = {
-  id: number;
+  id: string;
   title: string;
   category: string;
   date: string;
@@ -13,13 +16,20 @@ type Transaction = {
   type: "Income" | "Expense";
 };
 
-const initialTransactions: Transaction[] = [
-  { id: 1, title: "Monthly Salary", category: "Salary", date: "2026-10-25", amount: 45000, type: "Income" },
-  { id: 2, title: "Grocery Shopping", category: "Food", date: "2026-10-24", amount: 1850, type: "Expense" },
-  { id: 3, title: "Electricity Bill", category: "Utilities", date: "2026-10-22", amount: 1200, type: "Expense" },
-  { id: 4, title: "Freelance Payment", category: "Freelance", date: "2026-10-20", amount: 8000, type: "Income" },
-  { id: 5, title: "Bus Pass", category: "Transport", date: "2026-10-18", amount: 650, type: "Expense" },
-];
+type Category = {
+  id: string;
+  name: string;
+  type: "income" | "expense";
+};
+
+type ApiTransaction = {
+  id: string;
+  type: "income" | "expense";
+  amount: number;
+  category_name: string;
+  date: string;
+  description: string;
+};
 
 const money = (amount: number) =>
   new Intl.NumberFormat("en-IN", {
@@ -28,31 +38,106 @@ const money = (amount: number) =>
     maximumFractionDigits: 2,
   }).format(amount);
 
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem("pennywise-access-token");
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function errorMessage(response: Response): Promise<string> {
+  try {
+    const body = await response.json();
+    if (typeof body.message === "string") return body.message;
+    if (typeof body.detail === "string") return body.detail;
+  } catch {
+    // ignore body parse errors
+  }
+  return "Something went wrong. Please try again.";
+}
+
+function fromApi(item: ApiTransaction): Transaction {
+  return {
+    id: item.id,
+    title: item.description || item.category_name,
+    category: item.category_name,
+    date: item.date,
+    amount: item.amount,
+    type: item.type === "income" ? "Income" : "Expense",
+  };
+}
+
 export default function TransactionsPage() {
-  const [transactions, setTransactions] =
-    useState<Transaction[]>(initialTransactions);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [allCategories, setAllCategories] = useState<Category[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All");
   const [categoryFilter, setCategoryFilter] = useState("All");
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
-  const [category, setCategory] = useState("Food");
+  const [categoryId, setCategoryId] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [amount, setAmount] = useState("");
   const [type, setType] = useState<"Income" | "Expense">("Expense");
   const [error, setError] = useState("");
 
-  const categories = [
-    "Food",
-    "Transport",
-    "Shopping",
-    "Utilities",
-    "Salary",
-    "Freelance",
-    "Entertainment",
-    "Healthcare",
-    "Other",
-  ];
+  const formCategories = allCategories.filter(
+    (item) => item.type === type.toLowerCase()
+  );
+  const categories = Array.from(
+    new Set(allCategories.map((item) => item.name))
+  ).sort();
+
+  const load = useCallback(async () => {
+    try {
+      const headers = authHeaders();
+      const [categoryResponse, transactionResponse] = await Promise.all([
+        fetch(`${API_URL}/categories`, { headers }),
+        fetch(`${API_URL}/transactions`, { headers }),
+      ]);
+
+      if (!categoryResponse.ok || !transactionResponse.ok) {
+        throw new Error(
+          await errorMessage(
+            categoryResponse.ok ? transactionResponse : categoryResponse
+          )
+        );
+      }
+
+      setAllCategories(await categoryResponse.json());
+      setTransactions(
+        ((await transactionResponse.json()) as ApiTransaction[]).map(fromApi)
+      );
+      setError("");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not load your transactions."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    // keep the selected category valid when the transaction type changes
+    const valid = allCategories.filter(
+      (item) => item.type === type.toLowerCase()
+    );
+    if (!valid.some((item) => item.id === categoryId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCategoryId(valid[0]?.id ?? "");
+    }
+  }, [type, allCategories, categoryId]);
 
   const filteredTransactions = useMemo(() => {
     return transactions.filter((transaction) => {
@@ -79,40 +164,71 @@ export default function TransactionsPage() {
     .filter((transaction) => transaction.type === "Expense")
     .reduce((sum, transaction) => sum + transaction.amount, 0);
 
-  function addTransaction(event: React.FormEvent<HTMLFormElement>) {
+  async function addTransaction(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const numericAmount = Number(amount);
 
-    if (!title.trim() || !amount || numericAmount <= 0) {
-      setError("Enter a description and a valid amount greater than zero.");
+    if (!title.trim() || !amount || numericAmount <= 0 || !categoryId) {
+      setError("Enter a description, a category and an amount greater than zero.");
       return;
     }
 
-    const newTransaction: Transaction = {
-      id: Date.now(),
-      title: title.trim(),
-      category,
-      date,
-      amount: numericAmount,
-      type,
-    };
+    setSaving(true);
+    try {
+      const response = await fetch(
+        `${API_URL}/${type === "Income" ? "income" : "expenses"}`,
+        {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({
+            amount: amount,
+            category_id: categoryId,
+            date,
+            description: title.trim(),
+          }),
+        }
+      );
 
-    setTransactions((current) => [newTransaction, ...current]);
-    setTitle("");
-    setAmount("");
-    setCategory("Food");
-    setDate(new Date().toISOString().slice(0, 10));
-    setType("Expense");
-    setError("");
-    setShowForm(false);
+      if (!response.ok) {
+        setError(await errorMessage(response));
+        return;
+      }
+
+      const created = fromApi(await response.json());
+      setTransactions((current) => [created, ...current]);
+      setTitle("");
+      setAmount("");
+      setDate(new Date().toISOString().slice(0, 10));
+      setError("");
+      setShowForm(false);
+    } catch {
+      setError("Could not reach the server. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function deleteTransaction(id: number) {
-    if (window.confirm("Delete this transaction?")) {
-      setTransactions((current) =>
-        current.filter((transaction) => transaction.id !== id)
+  async function deleteTransaction(item: Transaction) {
+    if (!window.confirm("Delete this transaction?")) return;
+
+    try {
+      const response = await fetch(
+        `${API_URL}/${item.type === "Income" ? "income" : "expenses"}/${item.id}`,
+        { method: "DELETE", headers: authHeaders() }
       );
+
+      if (!response.ok) {
+        setError(await errorMessage(response));
+        return;
+      }
+
+      setTransactions((current) =>
+        current.filter((transaction) => transaction.id !== item.id)
+      );
+      setError("");
+    } catch {
+      setError("Could not reach the server. Please try again.");
     }
   }
 
@@ -179,6 +295,12 @@ export default function TransactionsPage() {
           </div>
         </section>
 
+        {error && !showForm && (
+          <p className="mb-6 rounded-xl bg-rose-50 p-4 text-sm text-rose-700" role="alert">
+            {error}
+          </p>
+        )}
+
         {showForm && (
           <section className="mb-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="mb-5 text-xl font-bold">Add a transaction</h2>
@@ -232,13 +354,13 @@ export default function TransactionsPage() {
                   Category
                 </label>
                 <select
-                  value={category}
-                  onChange={(event) => setCategory(event.target.value)}
+                  value={categoryId}
+                  onChange={(event) => setCategoryId(event.target.value)}
                   className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3"
                 >
-                  {categories.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
+                  {formCategories.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
                     </option>
                   ))}
                 </select>
@@ -258,9 +380,10 @@ export default function TransactionsPage() {
               <div className="flex items-end">
                 <button
                   type="submit"
-                  className="w-full rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700"
+                  disabled={saving}
+                  className="w-full rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
-                  Save Transaction
+                  {saving ? "Saving..." : "Save Transaction"}
                 </button>
               </div>
 
@@ -361,7 +484,7 @@ export default function TransactionsPage() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <button
-                        onClick={() => deleteTransaction(transaction.id)}
+                        onClick={() => deleteTransaction(transaction)}
                         className="font-medium text-rose-600 hover:text-rose-800"
                         aria-label={`Delete ${transaction.title}`}
                       >
@@ -377,7 +500,9 @@ export default function TransactionsPage() {
                       colSpan={6}
                       className="px-6 py-12 text-center text-slate-500"
                     >
-                      No transactions found. Try changing your search or filters.
+                      {loading
+                        ? "Loading transactions..."
+                        : "No transactions found. Try changing your search or filters."}
                     </td>
                   </tr>
                 )}
@@ -386,10 +511,6 @@ export default function TransactionsPage() {
           </div>
         </section>
 
-        <p className="mt-5 text-sm text-slate-500">
-          Demo data only: transactions are stored in browser memory and reset
-          when this page is refreshed. Backend integration is still required.
-        </p>
       </div>
     </main>
   );

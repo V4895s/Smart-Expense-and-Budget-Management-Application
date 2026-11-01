@@ -1,159 +1,262 @@
-
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
+type Category = {
+  id: string;
+  name: string;
+  type: "income" | "expense";
+  is_default: boolean;
+};
 
 type Budget = {
   id: string;
   name: string;
-  category: string;
-  limit: number;
+  category_id: string;
+  category_name: string;
+  amount: number;
+  period: "weekly" | "monthly";
   spent: number;
+  remaining: number;
+  period_start: string;
+  period_end: string;
 };
 
-const STORAGE_KEY = "pennywise-budgets";
-
-const categories = [
-  "Food",
-  "Transport",
-  "Shopping",
-  "Utilities",
-  "Entertainment",
-  "Health",
-  "Education",
-  "Other",
-];
-
-const initialBudgets: Budget[] = [
-  { id: "1", name: "Food & Dining", category: "Food", limit: 10000, spent: 6500 },
-  { id: "2", name: "Transport", category: "Transport", limit: 5000, spent: 2400 },
-  { id: "3", name: "Shopping", category: "Shopping", limit: 6000, spent: 4200 },
-];
+type BudgetForm = {
+  name: string;
+  category_id: string;
+  amount: string;
+  period: "weekly" | "monthly";
+};
 
 const money = (amount: number) =>
   new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
-    maximumFractionDigits: 0,
+    maximumFractionDigits: 2,
   }).format(amount);
 
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem("pennywise-access-token");
+
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function errorMessage(response: Response): Promise<string> {
+  try {
+    const body = await response.json();
+
+    if (typeof body.message === "string") return body.message;
+    if (typeof body.detail === "string") return body.detail;
+  } catch {
+    // Ignore response parsing errors.
+  }
+
+  return "Something went wrong. Please try again.";
+}
+
 export default function BudgetsPage() {
-  const [budgets, setBudgets] = useState<Budget[]>(initialBudgets);
-  const [loaded, setLoaded] = useState(false);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+
   const [error, setError] = useState("");
-  const [form, setForm] = useState({
+
+  const [form, setForm] = useState<BudgetForm>({
     name: "",
-    category: "Food",
-    limit: "",
+    category_id: "",
+    amount: "",
+    period: "monthly",
   });
 
-  useEffect(() => {
+  const expenseCategories = useMemo(
+    () => categories.filter((category) => category.type === "expense"),
+    [categories]
+  );
+
+  const load = useCallback(async () => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved !== null) {
-        const parsed: unknown = JSON.parse(saved);
-        if (Array.isArray(parsed)) setBudgets(parsed as Budget[]);
+      const headers = authHeaders();
+
+      const [budgetResponse, categoryResponse] = await Promise.all([
+        fetch(`${API_URL}/budgets`, { headers }),
+        fetch(`${API_URL}/categories`, { headers }),
+      ]);
+
+      if (!budgetResponse.ok || !categoryResponse.ok) {
+        throw new Error(
+          await errorMessage(
+            budgetResponse.ok ? categoryResponse : budgetResponse
+          )
+        );
       }
-    } catch {
-      // Keep the initial sample data if stored data cannot be read.
+
+      const budgetData: Budget[] = await budgetResponse.json();
+      const categoryData: Category[] = await categoryResponse.json();
+
+      setBudgets(budgetData);
+      setCategories(categoryData);
+      setError("");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not load your budgets."
+      );
+    } finally {
+      setLoading(false);
     }
-    setLoaded(true);
   }, []);
 
   useEffect(() => {
-    if (loaded) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(budgets));
-    }
-  }, [budgets, loaded]);
+    void load();
+  }, [load]);
 
-  const totalLimit = useMemo(
-    () => budgets.reduce((sum, budget) => sum + budget.limit, 0),
-    [budgets]
+  const totalLimit = budgets.reduce(
+    (sum, budget) => sum + budget.amount,
+    0
   );
 
-  const totalSpent = useMemo(
-    () => budgets.reduce((sum, budget) => sum + budget.spent, 0),
-    [budgets]
+  const totalSpent = budgets.reduce(
+    (sum, budget) => sum + budget.spent,
+    0
+  );
+
+  const totalRemaining = budgets.reduce(
+    (sum, budget) => sum + budget.remaining,
+    0
   );
 
   function openCreateForm() {
     setEditingId(null);
-    setForm({ name: "", category: "Food", limit: "" });
+
+    setForm({
+      name: "",
+      category_id: expenseCategories[0]?.id ?? "",
+      amount: "",
+      period: "monthly",
+    });
+
     setError("");
     setShowForm(true);
   }
 
   function openEditForm(budget: Budget) {
     setEditingId(budget.id);
+
     setForm({
       name: budget.name,
-      category: budget.category,
-      limit: String(budget.limit),
+      category_id: budget.category_id,
+      amount: String(budget.amount),
+      period: budget.period,
     });
+
     setError("");
     setShowForm(true);
   }
 
-  function saveBudget(event: React.FormEvent<HTMLFormElement>) {
+  async function saveBudget(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const name = form.name.trim();
-    const limit = Number(form.limit);
+    const amount = Number(form.amount);
 
-    if (!name) {
-      setError("Enter a name for this budget.");
+    if (!name || !form.category_id) {
+      setError("Enter a budget name and select a category.");
       return;
     }
 
-    if (!Number.isFinite(limit) || limit <= 0) {
+    if (!Number.isFinite(amount) || amount <= 0) {
       setError("The spending limit must be greater than zero.");
       return;
     }
 
     const duplicate = budgets.some(
       (budget) =>
-        budget.category === form.category &&
+        budget.category_id === form.category_id &&
+        budget.period === form.period &&
         budget.id !== editingId
     );
 
     if (duplicate) {
-      setError("A budget for this category already exists.");
+      setError(
+        "A budget for this category and period already exists."
+      );
       return;
     }
 
-    if (editingId) {
-      setBudgets((current) =>
-        current.map((budget) =>
-          budget.id === editingId
-            ? { ...budget, name, category: form.category, limit }
-            : budget
-        )
-      );
-    } else {
-      setBudgets((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          name,
-          category: form.category,
-          limit,
-          spent: 0,
-        },
-      ]);
-    }
+    setSaving(true);
 
-    setShowForm(false);
-    setError("");
+    try {
+      const response = await fetch(
+        editingId
+          ? `${API_URL}/budgets/${editingId}`
+          : `${API_URL}/budgets`,
+        {
+          method: editingId ? "PUT" : "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({
+            name,
+            category_id: form.category_id,
+            amount,
+            period: form.period,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        setError(await errorMessage(response));
+        return;
+      }
+
+      setShowForm(false);
+      setEditingId(null);
+      setError("");
+
+      await load();
+    } catch {
+      setError("Could not reach the server. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function deleteBudget(id: string) {
+  async function deleteBudget(id: string) {
     if (!window.confirm("Delete this budget? This action cannot be undone.")) {
       return;
     }
 
-    setBudgets((current) => current.filter((budget) => budget.id !== id));
+    try {
+      const response = await fetch(`${API_URL}/budgets/${id}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+
+      if (!response.ok) {
+        setError(await errorMessage(response));
+        return;
+      }
+
+      setBudgets((current) =>
+        current.filter((budget) => budget.id !== id)
+      );
+
+      setError("");
+    } catch {
+      setError("Could not reach the server. Please try again.");
+    }
   }
 
   return (
@@ -164,21 +267,42 @@ export default function BudgetsPage() {
             <p className="mb-1 text-sm text-slate-500">
               PennyWise / Budgets
             </p>
+
             <h1 className="text-3xl font-bold tracking-tight">
               Your budgets
             </h1>
+
             <p className="mt-2 text-sm text-slate-500">
               Set spending limits and keep your expenses in check.
             </p>
           </div>
 
-          <button
-            onClick={openCreateForm}
-            className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white hover:bg-indigo-700"
-          >
-            + Create budget
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/"
+              className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              ← Back to Dashboard
+            </Link>
+
+            <button
+              onClick={openCreateForm}
+              disabled={expenseCategories.length === 0}
+              className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              + Create budget
+            </button>
+          </div>
         </header>
+
+        {error && (
+          <p
+            role="alert"
+            className="mb-6 rounded-xl bg-rose-50 p-4 text-sm text-rose-700"
+          >
+            {error}
+          </p>
+        )}
 
         <section className="mb-7 grid gap-4 sm:grid-cols-3">
           <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -195,7 +319,7 @@ export default function BudgetsPage() {
               {money(totalSpent)}
             </p>
             <p className="mt-2 text-xs text-slate-400">
-              Based on current budget figures
+              Based on your recorded expenses
             </p>
           </article>
 
@@ -203,15 +327,15 @@ export default function BudgetsPage() {
             <p className="text-sm text-slate-500">Remaining budget</p>
             <p
               className={`mt-3 text-2xl font-bold ${
-                totalLimit - totalSpent < 0
+                totalRemaining < 0
                   ? "text-rose-600"
                   : "text-emerald-600"
               }`}
             >
-              {money(totalLimit - totalSpent)}
+              {money(totalRemaining)}
             </p>
             <p className="mt-2 text-xs text-slate-400">
-              Total limits minus total spending
+              Total remaining across budgets
             </p>
           </article>
         </section>
@@ -222,11 +346,15 @@ export default function BudgetsPage() {
               {editingId ? "Edit budget" : "Create a budget"}
             </h2>
 
-            <form onSubmit={saveBudget} className="grid gap-4 sm:grid-cols-3">
+            <form onSubmit={saveBudget} className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label htmlFor="budget-name" className="mb-2 block text-sm font-medium">
+                <label
+                  htmlFor="budget-name"
+                  className="mb-2 block text-sm font-medium"
+                >
                   Budget name
                 </label>
+
                 <input
                   id="budget-name"
                   value={form.name}
@@ -234,44 +362,57 @@ export default function BudgetsPage() {
                     setForm({ ...form, name: event.target.value })
                   }
                   placeholder="e.g. Monthly groceries"
-                  maxLength={60}
+                  maxLength={100}
                   required
                   className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </div>
 
               <div>
-                <label htmlFor="budget-category" className="mb-2 block text-sm font-medium">
-                  Category
+                <label
+                  htmlFor="budget-category"
+                  className="mb-2 block text-sm font-medium"
+                >
+                  Expense category
                 </label>
+
                 <select
                   id="budget-category"
-                  value={form.category}
+                  value={form.category_id}
                   onChange={(event) =>
-                    setForm({ ...form, category: event.target.value })
+                    setForm({ ...form, category_id: event.target.value })
                   }
+                  required
                   className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-indigo-500"
                 >
-                  {categories.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
+                  <option value="" disabled>
+                    Select a category
+                  </option>
+
+                  {expenseCategories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
                     </option>
                   ))}
                 </select>
               </div>
 
               <div>
-                <label htmlFor="budget-limit" className="mb-2 block text-sm font-medium">
+                <label
+                  htmlFor="budget-limit"
+                  className="mb-2 block text-sm font-medium"
+                >
                   Spending limit (₹)
                 </label>
+
                 <input
                   id="budget-limit"
                   type="number"
-                  min="1"
-                  step="1"
-                  value={form.limit}
+                  min="0.01"
+                  step="0.01"
+                  value={form.amount}
                   onChange={(event) =>
-                    setForm({ ...form, limit: event.target.value })
+                    setForm({ ...form, amount: event.target.value })
                   }
                   placeholder="10000"
                   required
@@ -279,19 +420,43 @@ export default function BudgetsPage() {
                 />
               </div>
 
-              {error && (
-                <p role="alert" className="text-sm text-rose-600 sm:col-span-3">
-                  {error}
-                </p>
-              )}
+              <div>
+                <label
+                  htmlFor="budget-period"
+                  className="mb-2 block text-sm font-medium"
+                >
+                  Budget period
+                </label>
 
-              <div className="flex gap-3 sm:col-span-3">
+                <select
+                  id="budget-period"
+                  value={form.period}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      period: event.target.value as "weekly" | "monthly",
+                    })
+                  }
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-indigo-500"
+                >
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+
+              <div className="flex flex-wrap gap-3 sm:col-span-2">
                 <button
                   type="submit"
-                  className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white hover:bg-indigo-700"
+                  disabled={saving || expenseCategories.length === 0}
+                  className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
-                  {editingId ? "Save changes" : "Create budget"}
+                  {saving
+                    ? "Saving..."
+                    : editingId
+                      ? "Save changes"
+                      : "Create budget"}
                 </button>
+
                 <button
                   type="button"
                   onClick={() => {
@@ -315,12 +480,18 @@ export default function BudgetsPage() {
             </p>
           </div>
 
-          {budgets.length === 0 ? (
+          {loading ? (
+            <div className="rounded-2xl border border-slate-200 bg-white px-6 py-14 text-center text-slate-500">
+              Loading budgets...
+            </div>
+          ) : budgets.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
               <h3 className="font-semibold">No budgets yet</h3>
+
               <p className="mt-2 text-sm text-slate-500">
                 Create your first budget to start tracking spending.
               </p>
+
               <button
                 onClick={openCreateForm}
                 className="mt-5 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white hover:bg-indigo-700"
@@ -332,12 +503,12 @@ export default function BudgetsPage() {
             <div className="grid gap-4 md:grid-cols-2">
               {budgets.map((budget) => {
                 const percentage =
-                  budget.limit > 0
-                    ? Math.round((budget.spent / budget.limit) * 100)
+                  budget.amount > 0
+                    ? Math.round((budget.spent / budget.amount) * 100)
                     : 0;
-                const remaining = budget.limit - budget.spent;
-                const overBudget = remaining < 0;
-                const warning = percentage >= 80;
+
+                const overBudget = budget.remaining < 0;
+                const warning = percentage >= 75;
 
                 return (
                   <article
@@ -347,9 +518,16 @@ export default function BudgetsPage() {
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">
-                          {budget.category}
+                          {budget.category_name}
                         </p>
-                        <h3 className="mt-2 text-lg font-bold">{budget.name}</h3>
+
+                        <h3 className="mt-2 text-lg font-bold">
+                          {budget.name}
+                        </h3>
+
+                        <p className="mt-1 text-xs capitalize text-slate-400">
+                          {budget.period} · {budget.period_start} to {budget.period_end}
+                        </p>
                       </div>
 
                       <div className="flex gap-3 text-sm">
@@ -360,6 +538,7 @@ export default function BudgetsPage() {
                         >
                           Edit
                         </button>
+
                         <button
                           onClick={() => deleteBudget(budget.id)}
                           className="font-medium text-rose-600 hover:text-rose-800"
@@ -377,10 +556,11 @@ export default function BudgetsPage() {
                           {money(budget.spent)}
                         </p>
                       </div>
+
                       <p className="text-right text-sm text-slate-500">
                         Limit{" "}
                         <span className="font-semibold text-slate-800">
-                          {money(budget.limit)}
+                          {money(budget.amount)}
                         </span>
                       </p>
                     </div>
@@ -390,8 +570,8 @@ export default function BudgetsPage() {
                       role="progressbar"
                       aria-label={`${budget.name} spending`}
                       aria-valuemin={0}
-                      aria-valuemax={budget.limit}
-                      aria-valuenow={budget.spent}
+                      aria-valuemax={budget.amount}
+                      aria-valuenow={Math.min(Math.max(budget.spent, 0), budget.amount)}
                     >
                       <div
                         className={`h-full rounded-full ${
@@ -402,19 +582,30 @@ export default function BudgetsPage() {
                               : "bg-indigo-600"
                         }`}
                         style={{
-                          width: `${Math.min(percentage, 100)}%`,
+                          width: `${Math.min(Math.max(percentage, 0), 100)}%`,
                         }}
                       />
                     </div>
 
                     <div className="mt-3 flex flex-wrap justify-between gap-2 text-sm">
-                      <span className={warning ? "font-medium text-amber-600" : "text-slate-500"}>
+                      <span
+                        className={
+                          warning
+                            ? "font-medium text-amber-600"
+                            : "text-slate-500"
+                        }
+                      >
                         {percentage}% used
                       </span>
-                      <span className={`font-semibold ${overBudget ? "text-rose-600" : "text-emerald-600"}`}>
+
+                      <span
+                        className={`font-semibold ${
+                          overBudget ? "text-rose-600" : "text-emerald-600"
+                        }`}
+                      >
                         {overBudget
-                          ? `${money(Math.abs(remaining))} over budget`
-                          : `${money(remaining)} remaining`}
+                          ? `${money(Math.abs(budget.remaining))} over budget`
+                          : `${money(budget.remaining)} remaining`}
                       </span>
                     </div>
                   </article>
@@ -425,8 +616,7 @@ export default function BudgetsPage() {
         </section>
 
         <p className="mt-8 text-center text-xs text-slate-400">
-          PennyWise · Budget figures are stored locally in this browser.
-          Spending amounts are sample data until transaction integration.
+          PennyWise · Budget and spending data synced with your account.
         </p>
       </div>
     </main>

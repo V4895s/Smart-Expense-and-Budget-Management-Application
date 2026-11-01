@@ -5,7 +5,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
-const API_URL = "http://127.0.0.1:8000";
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -49,15 +50,25 @@ export default function LoginPage() {
         return;
       }
 
-      // Temporary prototype storage. Prefer secure, HttpOnly cookies
-      // for production authentication.
+      if (
+        !data?.access_token ||
+        !data?.user?.email ||
+        !data?.user?.id
+      ) {
+        setError("Invalid login response from server.");
+        return;
+      }
+
       localStorage.setItem("pennywise-logged-in", "true");
       localStorage.setItem("pennywise-user-email", data.user.email);
-      localStorage.setItem("pennywise-user-name", data.user.full_name);
-      localStorage.setItem("pennywise-user-id", data.user.id);
+      localStorage.setItem(
+        "pennywise-user-name",
+        data.user.full_name || "User"
+      );
+      localStorage.setItem("pennywise-user-id", String(data.user.id));
       localStorage.setItem("pennywise-access-token", data.access_token);
 
-      router.push("/");
+      router.replace("/");
     } catch {
       setError(
         "Cannot connect to the server. Make sure the backend is running."
@@ -110,6 +121,15 @@ export default function LoginPage() {
               required
               className="w-full rounded-lg border border-slate-200 px-4 py-3 outline-none focus:border-blue-500"
             />
+          </div>
+
+          <div className="text-right">
+            <Link
+              href="/reset-password"
+              className="text-sm font-medium text-indigo-600 hover:underline"
+            >
+              Forgot password?
+            </Link>
           </div>
 
           {error && (

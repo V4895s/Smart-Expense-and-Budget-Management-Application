@@ -1,4 +1,6 @@
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
@@ -14,6 +16,8 @@ from security import (
     hash_password,
     verify_password,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -45,9 +49,14 @@ def authenticate_user(email: str, password: str) -> User:
             )
 
         return user
+
     except HTTPException:
         raise
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        logger.error(
+            "Database error during login: %s",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not verify your login. Please try again later.",
@@ -95,17 +104,26 @@ def register_user(request: RegisterRequest):
             full_name=user.full_name,
             email=user.email,
         )
+
     except HTTPException:
         db.rollback()
         raise
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
+        logger.warning(
+            "Database integrity error during registration: %s",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with this email already exists.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
         db.rollback()
+        logger.error(
+            "Database error during registration: %s",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not save the account. Please try again later.",
