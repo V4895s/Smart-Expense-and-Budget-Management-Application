@@ -4,6 +4,20 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+} from "recharts";
+
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import { saveAs } from "file-saver";
+
 type Transaction = {
   id: number;
   description: string;
@@ -39,6 +53,60 @@ const dateLabel = (date: string) =>
     month: "short",
     year: "numeric",
   });
+
+  const exportPDF = (
+  income: number,
+  expenses: number,
+  balance: number,
+  filteredTransactions: Transaction[]
+) => {
+  const doc = new jsPDF();
+
+  doc.setFontSize(18);
+  doc.text("PennyWise Financial Report", 14, 20);
+
+  doc.setFontSize(12);
+  doc.text(`Income: ${money(income)}`, 14, 35);
+  doc.text(`Expenses: ${money(expenses)}`, 14, 45);
+  doc.text(`Net Savings: ${money(balance)}`, 14, 55);
+
+  autoTable(doc, {
+    startY: 70,
+    head: [["Description", "Category", "Date", "Amount"]],
+    body: filteredTransactions.map((t) => [
+      t.description,
+      t.category,
+      dateLabel(t.date),
+      `${t.type === "income" ? "+" : "-"}${money(t.amount)}`,
+    ]),
+  });
+
+  doc.save("PennyWise_Report.pdf");
+};
+
+const exportCSV = (filteredTransactions: Transaction[]) => {
+  const headers = ["Description", "Category", "Date", "Type", "Amount"];
+
+  const rows = filteredTransactions.map((t) => [
+    t.description,
+    t.category,
+    dateLabel(t.date),
+    t.type,
+    t.amount,
+  ]);
+
+  const csv =
+    [headers, ...rows]
+      .map((row) => row.join(","))
+      .join("\n");
+
+  const blob = new Blob([csv], {
+    type: "text/csv;charset=utf-8;",
+  });
+
+  saveAs(blob, "PennyWise_Report.csv");
+};
+
 
 export default function ReportsPage() {
   const [period, setPeriod] = useState("month");
@@ -98,6 +166,11 @@ export default function ReportsPage() {
     ...categoryTotals.map((item) => item.amount),
     1
   );
+
+  const chartData = categoryTotals.map((item) => ({
+  category: item.name,
+  amount: item.amount,
+}));
 
   const categories = Array.from(
     new Set(sampleTransactions.map((transaction) => transaction.category))
@@ -240,11 +313,28 @@ export default function ReportsPage() {
               See which categories account for your spending.
             </p>
 
+            <div className="mt-6 h-72">
+  <ResponsiveContainer width="100%" height="100%">
+    <BarChart data={chartData}>
+      <CartesianGrid strokeDasharray="3 3" />
+      <XAxis dataKey="category" />
+      <YAxis />
+      <Tooltip />
+      <Bar
+        dataKey="amount"
+        fill="#4F46E5"
+        radius={[6, 6, 0, 0]}
+      />
+    </BarChart>
+  </ResponsiveContainer>
+</div>
+
             {categoryTotals.length === 0 ? (
               <div className="py-12 text-center text-sm text-slate-500">
                 No expense data for this selection.
               </div>
             ) : (
+              <>
               <div className="mt-7 space-y-5">
                 {categoryTotals.map((item) => (
                   <div key={item.name}>
@@ -269,6 +359,7 @@ export default function ReportsPage() {
                   </div>
                 ))}
               </div>
+              </>
             )}
           </article>
         </section>
@@ -326,6 +417,31 @@ export default function ReportsPage() {
             </div>
           )}
         </section>
+
+        <section className="mt-7 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+  <h2 className="text-lg font-bold">Export Reports</h2>
+
+  <p className="mt-1 text-sm text-slate-500">
+    Download your report in different formats.
+  </p>
+
+  <div className="mt-5 flex gap-4">
+    <button
+      onClick={() =>
+  exportPDF(income, expenses, balance, filteredTransactions)}
+      className="rounded-xl bg-indigo-600 px-5 py-3 text-white hover:bg-indigo-700"
+    >
+      Export PDF
+    </button>
+
+    <button
+      onClick={() => exportCSV(filteredTransactions)}
+      className="rounded-xl border border-slate-300 px-5 py-3 hover:bg-slate-100"
+    >
+      Export CSV
+    </button>
+  </div>
+</section>
 
         <p className="mt-7 text-center text-xs text-slate-400">
           PennyWise · Reports use sample transactions and are not connected to
