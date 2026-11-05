@@ -14,6 +14,8 @@ from models.category import Category
 from models.budget import Budget
 from models.transaction import Transaction
 from models.user import User
+from services.budget_service import get_budget_spending
+from services.notification_service import evaluate_budget_alerts
 from schemas.budget import (
     BudgetCreate,
     BudgetUpdate,
@@ -26,47 +28,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/budgets", tags=["Budgets"])
 
-
-def get_period_dates(period: str):
-    today = date.today()
-
-    if period == "weekly":
-        start = today - timedelta(days=today.weekday())
-        end = start + timedelta(days=6)
-
-    else:
-        start = today.replace(day=1)
-        last_day = calendar.monthrange(today.year, today.month)[1]
-        end = today.replace(day=last_day)
-
-    return start, end
-
-
-def get_spending(
-    db: Session,
-    budget: Budget,
-    start: date,
-    end: date,
-) -> Decimal:
-    result = db.scalar(
-        select(func.coalesce(func.sum(Transaction.amount), 0)).where(
-            Transaction.user_id == budget.user_id,
-            Transaction.category_id == budget.category_id,
-            Transaction.type == "expense",
-            Transaction.transaction_date >= start,
-            Transaction.transaction_date <= end,
-        )
-    )
-
-    return Decimal(str(result or 0))
-
-
 def to_response(db: Session, budget: Budget) -> BudgetResponse:
-    start, end = get_period_dates(budget.period)
+    start, end, spent = get_budget_spending(db, budget)
 
-    spent = get_spending(db, budget, start, end)
     remaining = budget.amount - spent
-
     category = db.get(Category, budget.category_id)
 
     return BudgetResponse(
@@ -81,7 +46,6 @@ def to_response(db: Session, budget: Budget) -> BudgetResponse:
         period_start=start.isoformat(),
         period_end=end.isoformat(),
     )
-
 
 def get_own_budget(
     db: Session,
@@ -138,6 +102,14 @@ def create_budget(
 
     try:
         db.add(budget)
+        db.flush()
+
+        evaluate_budget_alerts(
+            db,
+            user_id=current_user.id,
+            category_id=budget.category_id,
+        )
+
         db.commit()
         db.refresh(budget)
 
@@ -241,11 +213,17 @@ def update_budget(
         setattr(budget, field, value)
 
     try:
+        evaluate_budget_alerts(
+            db,
+            user_id=current_user.id,
+            category_id=budget.category_id,
+        )
+    
         db.commit()
         db.refresh(budget)
-
+    
         return to_response(db, budget)
-
+    
     except SQLAlchemyError as exc:
         db.rollback()
         raise db_error("updating budget", exc) from None
