@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import SignOutButton from "@/components/SignOutButton";
+import BudgetAlerts from "@/components/BudgetAlerts";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
@@ -278,7 +279,7 @@ export default function Home() {
             </div>
           </div>
         </section>
-
+        <BudgetAlerts />
         {/* Workspace */}
         <section className="mt-10">
           <h2 className="text-xl font-semibold text-slate-900">

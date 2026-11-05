@@ -17,7 +17,8 @@ from schemas.transaction import (
     TransactionUpdate,
 )
 from security import get_current_user
-from services_categories import get_visible_category
+from services.category_service import get_visible_category
+from services.notification_service import evaluate_budget_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +93,18 @@ def build_transaction_router(tx_type: str, prefix: str, tag: str) -> APIRouter:
         )
         try:
             db.add(tx)
+            db.flush()
+        
+            if tx_type == "expense":
+                evaluate_budget_alerts(
+                    db,
+                    user_id=current_user.id,
+                    category_id=tx.category_id,
+                )
+        
             db.commit()
             db.refresh(tx)
+        
         except SQLAlchemyError as exc:
             db.rollback()
             raise _db_unavailable("creating transaction", exc) from None
@@ -142,11 +153,18 @@ def build_transaction_router(tx_type: str, prefix: str, tag: str) -> APIRouter:
             tx.description = payload.description
 
         try:
+            if tx_type == "expense":
+                evaluate_budget_alerts(
+                    db,
+                    user_id=current_user.id,
+                    category_id=tx.category_id,
+                )
+
             db.commit()
             db.refresh(tx)
         except SQLAlchemyError as exc:
             db.rollback()
-            raise _db_unavailable("updating transaction", exc) from None
+            raise _db_unavailable("updating transaction", exc) from None  
         return to_response(tx, db.get(Category, tx.category_id).name)
 
     @router.delete("/{tx_id}", status_code=status.HTTP_204_NO_CONTENT)
