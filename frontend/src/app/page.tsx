@@ -192,6 +192,11 @@ export default function Home() {
       href: "/reports",
     },
     {
+      name: "Savings Goals",
+      description: "Set targets and track your savings",
+      href: "/goals",
+    },
+    {
       name: "Profile",
       description: "Manage your account",
       href: "/profile",
@@ -280,7 +285,7 @@ export default function Home() {
             Your workspace
           </h2>
 
-          <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
             {sections.map((section) => (
               <Link
                 key={section.href}
