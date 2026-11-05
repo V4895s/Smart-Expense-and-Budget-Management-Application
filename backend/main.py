@@ -13,6 +13,7 @@ from routes.income import router as income_router
 from routes.transactions import router as transactions_router
 from services_categories import seed_default_categories
 from routes.budgets import router as budgets_router
+from routes.savings_goals import router as savings_goals_router
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Create any missing tables and seed built-in categories (idempotent).
@@ -52,6 +53,7 @@ app.include_router(income_router)
 app.include_router(expenses_router)
 app.include_router(transactions_router)
 app.include_router(budgets_router)
+app.include_router(savings_goals_router)
 
 @app.get("/")
 def root():
