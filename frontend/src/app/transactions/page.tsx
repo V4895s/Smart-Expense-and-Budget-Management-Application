@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
 const API_URL =
@@ -57,6 +57,14 @@ async function errorMessage(response: Response): Promise<string> {
   return "Something went wrong. Please try again.";
 }
 
+function friendlyError(err: unknown, fallback: string): string {
+  // fetch() throws TypeError when the API is unreachable (SRS 3.4 network failure handling)
+  if (err instanceof TypeError) {
+    return "Service temporarily unavailable. Please check your connection and try again.";
+  }
+  return err instanceof Error ? err.message : fallback;
+}
+
 function fromApi(item: ApiTransaction): Transaction {
   return {
     id: item.id,
@@ -76,6 +84,10 @@ export default function TransactionsPage() {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All");
   const [categoryFilter, setCategoryFilter] = useState("All");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [filteredTransactions, setFilteredTransactions] = useState<Transaction[]>([]);
+  const [filterError, setFilterError] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
   const [categoryId, setCategoryId] = useState("");
@@ -113,11 +125,7 @@ export default function TransactionsPage() {
       );
       setError("");
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Could not load your transactions."
-      );
+      setError(friendlyError(err, "Could not load your transactions."));
     } finally {
       setLoading(false);
     }
@@ -139,22 +147,46 @@ export default function TransactionsPage() {
     }
   }, [type, allCategories, categoryId]);
 
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter((transaction) => {
-      const matchesSearch =
-        transaction.title.toLowerCase().includes(search.toLowerCase()) ||
-        transaction.category.toLowerCase().includes(search.toLowerCase());
+  // Server-side search and filter (SEA-F-013). Debounced; re-runs after any add/delete
+  // because `transactions` is reloaded then.
+  useEffect(() => {
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFilterError("'From' date must not be after 'To' date.");
+      return;
+    }
 
-      const matchesType =
-        typeFilter === "All" || transaction.type === typeFilter;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams();
+        if (search.trim()) params.set("q", search.trim());
+        if (typeFilter !== "All") params.set("type", typeFilter.toLowerCase());
+        if (categoryFilter !== "All") params.set("category", categoryFilter);
+        if (dateFrom) params.set("date_from", dateFrom);
+        if (dateTo) params.set("date_to", dateTo);
 
-      const matchesCategory =
-        categoryFilter === "All" ||
-        transaction.category === categoryFilter;
+        const query = params.toString();
+        const response = await fetch(
+          `${API_URL}/transactions${query ? `?${query}` : ""}`,
+          { headers: authHeaders() }
+        );
+        if (!response.ok) throw new Error(await errorMessage(response));
+        const data = (await response.json()) as ApiTransaction[];
+        if (!cancelled) {
+          setFilteredTransactions(data.map(fromApi));
+          setFilterError("");
+        }
+      } catch (err) {
+        if (!cancelled) setFilterError(friendlyError(err, "Search failed."));
+      }
+    }, 300);
 
-      return matchesSearch && matchesType && matchesCategory;
-    });
-  }, [transactions, search, typeFilter, categoryFilter]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [search, typeFilter, categoryFilter, dateFrom, dateTo, transactions]);
 
   const totalIncome = transactions
     .filter((transaction) => transaction.type === "Income")
@@ -405,6 +437,7 @@ export default function TransactionsPage() {
 
             <div className="mt-5 grid gap-3 md:grid-cols-3">
               <input
+                aria-label="Search transactions"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Search description or category..."
@@ -433,7 +466,47 @@ export default function TransactionsPage() {
                   </option>
                 ))}
               </select>
+
+              <label className="flex items-center gap-2 text-sm text-slate-600">
+                From
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(event) => setDateFrom(event.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3"
+                />
+              </label>
+
+              <label className="flex items-center gap-2 text-sm text-slate-600">
+                To
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(event) => setDateTo(event.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3"
+                />
+              </label>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch("");
+                  setTypeFilter("All");
+                  setCategoryFilter("All");
+                  setDateFrom("");
+                  setDateTo("");
+                }}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Clear filters
+              </button>
             </div>
+
+            {filterError && (
+              <p role="alert" className="mt-3 text-sm text-rose-600">
+                {filterError}
+              </p>
+            )}
           </div>
 
           <div className="overflow-x-auto">
