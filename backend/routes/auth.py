@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 
 from db import SessionLocal
 from models.user import User
-from schemas.auth import LoginRequest, RegisterRequest, UserResponse
+from schemas.auth import (
+    LoginRequest,
+    ProfileUpdateRequest,
+    RegisterRequest,
+    UserResponse,
+)
 from security import (
     create_access_token,
     get_current_user,
@@ -33,6 +38,7 @@ def get_database_session() -> Session:
 
 def authenticate_user(email: str, password: str) -> User:
     db = get_database_session()
+
     try:
         normalized_email = email.strip().lower()
         user = db.scalar(
@@ -78,12 +84,14 @@ def register_user(request: RegisterRequest):
         )
 
     db = get_database_session()
+
     try:
         email = str(request.email).strip().lower()
 
         existing_user = db.scalar(
             select(User).where(User.email == email)
         )
+
         if existing_user:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -95,6 +103,7 @@ def register_user(request: RegisterRequest):
             email=email,
             password_hash=hash_password(request.password),
         )
+
         db.add(user)
         db.commit()
         db.refresh(user)
@@ -138,6 +147,7 @@ def login_user(request: LoginRequest):
         str(request.email),
         request.password,
     )
+
     return {
         "access_token": create_access_token(user.id),
         "token_type": "bearer",
@@ -158,6 +168,7 @@ def login_for_swagger(
         form_data.username,
         form_data.password,
     )
+
     return {
         "access_token": create_access_token(user.id),
         "token_type": "bearer",
@@ -173,3 +184,75 @@ def get_my_profile(
         full_name=current_user.full_name,
         email=current_user.email,
     )
+
+
+@router.put("/me", response_model=UserResponse)
+def update_my_profile(
+    request: ProfileUpdateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    db = get_database_session()
+
+    try:
+        # Load the authenticated user into this session.
+        user = db.get(User, current_user.id)
+
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found.",
+            )
+
+        normalized_email = str(request.email).strip().lower()
+
+        # Prevent another user from using the same email.
+        existing_user = db.scalar(
+            select(User).where(
+                User.email == normalized_email,
+                User.id != user.id,
+            )
+        )
+
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This email address is already registered.",
+            )
+
+        user.full_name = request.full_name.strip()
+        user.email = normalized_email
+
+        db.commit()
+        db.refresh(user)
+
+        return UserResponse(
+            id=user.id,
+            full_name=user.full_name,
+            email=user.email,
+        )
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        logger.warning(
+            "Database integrity error during profile update: %s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This email address is already registered.",
+        ) from None
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error(
+            "Database error during profile update: %s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not update your profile. Please try again later.",
+        ) from None
+    finally:
+        db.close()
