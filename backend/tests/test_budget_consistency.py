@@ -143,3 +143,32 @@ def test_budget_spending_tracks_transaction_category_and_date_changes(
         client.get(f"/budgets/{transport_budget['id']}").json()["spent"]
         == 0
     )
+def test_budgets_are_private(make_client, cat):
+    alice = make_client("alice")
+    food = cat(alice, "Food", "expense")
+
+    created = alice.post(
+        "/budgets",
+        json={
+            "name": "Private food budget",
+            "category_id": food,
+            "amount": "1000",
+            "period": "monthly",
+        },
+    )
+
+    assert created.status_code == 201
+    budget_id = created.json()["id"]
+
+    bob = make_client("bob")
+
+    assert bob.get("/budgets").json() == []
+    assert bob.get(f"/budgets/{budget_id}").status_code == 404
+    assert bob.put(
+        f"/budgets/{budget_id}",
+        json={"name": "Stolen budget"},
+    ).status_code == 404
+    assert bob.delete(f"/budgets/{budget_id}").status_code == 404
+
+    alice = make_client("alice")
+    assert alice.get(f"/budgets/{budget_id}").status_code == 200
