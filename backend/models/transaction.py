@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db import Base
@@ -10,6 +10,13 @@ from db import Base
 
 class Transaction(Base):
     __tablename__ = "transactions"
+    # Composite indexes for the common per-user list/filter/report queries (SEA-NF-001).
+    # Existing databases get them from migrations/20261106_transaction_indexes.sql.
+    __table_args__ = (
+        Index("ix_transactions_user_date", "user_id", "transaction_date"),
+        Index("ix_transactions_user_type_date", "user_id", "type", "transaction_date"),
+        Index("ix_transactions_user_category", "user_id", "category_id"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
