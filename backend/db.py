@@ -21,10 +21,15 @@ engine = None
 SessionLocal = None
 
 if DATABASE_URL:
-    engine = create_engine(
-        DATABASE_URL,
-        pool_pre_ping=True,
-    )
+    _engine_kwargs = {"pool_pre_ping": True}
+    if DATABASE_URL.startswith("postgresql"):
+        # Fail fast instead of hanging when the database is unreachable (SEA-NF-002).
+        _engine_kwargs.update(
+            pool_recycle=300,
+            pool_timeout=10,
+            connect_args={"connect_timeout": 10},
+        )
+    engine = create_engine(DATABASE_URL, **_engine_kwargs)
     SessionLocal = sessionmaker(
         bind=engine,
         autoflush=False,

@@ -1,0 +1,31 @@
+name: Uptime check
+
+# SEA-NF-002: pings the deployed API's /health endpoint and fails the run if it is down.
+# Set the repository variable API_HEALTH_URL (Settings > Secrets and variables > Actions > Variables),
+# e.g. https://your-api.onrender.com/health
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check /health
+        env:
+          URL: ${{ vars.API_HEALTH_URL }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "::notice::API_HEALTH_URL is not set; skipping."
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$URL" || echo 000)
+            echo "attempt $attempt -> HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 15
+          done
+          echo "::error::Health check failed for $URL"
+          exit 1
