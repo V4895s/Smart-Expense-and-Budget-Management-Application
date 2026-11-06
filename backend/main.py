@@ -1,11 +1,22 @@
-from fastapi import FastAPI
+import logging
+import time
+
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from contextlib import asynccontextmanager
 
 from db import Base, SessionLocal, engine
-from errors import validation_error_handler
+from errors import (
+    database_error_handler,
+    http_exception_handler,
+    unhandled_error_handler,
+    validation_error_handler,
+)
+from health import router as health_router
+from sqlalchemy.exc import SQLAlchemyError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from routes.auth import router as auth_router
 from routes.categories import router as categories_router
 from routes.expenses import router as expenses_router
@@ -47,7 +58,29 @@ app.add_middleware(
 )
 
 app.add_exception_handler(RequestValidationError, validation_error_handler)
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(SQLAlchemyError, database_error_handler)
+app.add_exception_handler(Exception, unhandled_error_handler)
 
+perf_logger = logging.getLogger("performance")
+SLOW_REQUEST_SECONDS = 5.0  # SEA-NF-001: 90% of requests must finish within 5 s
+
+
+@app.middleware("http")
+async def response_time_middleware(request: Request, call_next):
+    """Measure every request; expose X-Process-Time and warn on slow ones (SEA-NF-001)."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed = time.perf_counter() - start
+    response.headers["X-Process-Time"] = f"{elapsed:.4f}"
+    if elapsed > SLOW_REQUEST_SECONDS:
+        perf_logger.warning("SLOW %s %s %.2fs", request.method, request.url.path, elapsed)
+    else:
+        perf_logger.info("%s %s %d %.3fs", request.method, request.url.path, response.status_code, elapsed)
+    return response
+
+
+app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(categories_router)
 app.include_router(income_router)
@@ -60,8 +93,3 @@ app.include_router(notifications_router)
 @app.get("/")
 def root():
     return {"message": "PennyWise API is running"}
-
-
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
