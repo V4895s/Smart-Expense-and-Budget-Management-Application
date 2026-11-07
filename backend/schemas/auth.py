@@ -56,3 +56,24 @@ class UserResponse(BaseModel):
     id: str
     full_name: str
     email: EmailStr
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+    password: str = Field(min_length=8, max_length=128)
+    confirm_password: str
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if not re.search(r"[A-Za-z]", value):
+            raise ValueError("Password must contain at least one letter.")
+        if not re.search(r"\d", value):
+            raise ValueError("Password must contain at least one number.")
+        return value
+
+    def passwords_match(self) -> bool:
+        return self.password == self.confirm_password
