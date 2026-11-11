@@ -198,6 +198,11 @@ export default function Home() {
       href: "/goals",
     },
     {
+       name: "Recurring",
+      description: "Automate salary, rent and subscriptions",
+      href: "/recurring",
+    },
+    {
       name: "Profile",
       description: "Manage your account",
       href: "/profile",

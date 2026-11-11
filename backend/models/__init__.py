@@ -5,3 +5,4 @@ from models.budget import Budget
 from models.savings_goal import SavingsGoal
 from models.notification import Notification
 from models.password_reset_token import PasswordResetToken
+from models.recurring_transaction import RecurringTransaction
