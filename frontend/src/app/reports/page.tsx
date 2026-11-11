@@ -27,6 +27,18 @@ type Transaction = {
   date: string;
 };
 
+type Budget = {
+  id: string;
+  name: string;
+  category_name: string;
+  amount: number;
+  period: "weekly" | "monthly";
+  spent: number;
+  remaining: number;
+  period_start: string;
+  period_end: string;
+};
+
 type Period = "week" | "month" | "year" | "all";
 
 const money = (amount: number) =>
@@ -43,6 +55,11 @@ const dateLabel = (date: string) =>
     year: "numeric",
   });
 
+const todayStamp = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
 function getStartDate(period: Period, now = new Date()) {
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   if (period === "week") start.setDate(start.getDate() - 6);
@@ -57,7 +74,8 @@ function exportPDF(
   expenses: number,
   balance: number,
   transactions: Transaction[],
-  period: Period
+  period: Period,
+  budgets: Budget[]
 ) {
   const doc = new jsPDF();
   doc.setFontSize(18);
@@ -84,10 +102,28 @@ function exportPDF(
     ]),
   });
 
-  doc.save("PennyWise_Report.pdf");
+  if (budgets.length > 0) {
+    doc.addPage();
+    doc.setFontSize(16);
+    doc.text("Budget Summary", 14, 20);
+    autoTable(doc, {
+      startY: 28,
+      head: [["Budget", "Category", "Period", "Limit", "Spent", "Remaining"]],
+      body: budgets.map((b) => [
+        b.name,
+        b.category_name,
+        b.period,
+        money(b.amount),
+        money(b.spent),
+        money(b.remaining),
+      ]),
+    });
+  }
+
+  doc.save(`PennyWise_Report_${todayStamp()}.pdf`);
 }
 
-function exportCSV(transactions: Transaction[]) {
+function exportCSV(transactions: Transaction[], budgets: Budget[]) {
   const escapeCSV = (value: string | number) =>
     `"${String(value).replaceAll('"', '""')}"`;
 
@@ -100,13 +136,27 @@ function exportCSV(transactions: Transaction[]) {
       t.type,
       String(t.amount),
     ]),
+    ...(budgets.length > 0
+      ? [
+          [],
+          ["Budget", "Category", "Period", "Limit", "Spent", "Remaining"],
+          ...budgets.map((b) => [
+            b.name,
+            b.category_name,
+            b.period,
+            String(b.amount),
+            String(b.spent),
+            String(b.remaining),
+          ]),
+        ]
+      : []),
   ];
 
   const csv = rows.map((row) => row.map(escapeCSV).join(",")).join("\r\n");
 
   saveAs(
     new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8;" }),
-    "PennyWise_Report.csv"
+    `PennyWise_Report_${todayStamp()}.csv`
   );
 }
 
@@ -114,6 +164,7 @@ export default function ReportsPage() {
   const [period, setPeriod] = useState<Period>("month");
   const [category, setCategory] = useState("all");
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -149,6 +200,13 @@ export default function ReportsPage() {
 
         const data: Transaction[] = await response.json();
         setTransactions(data);
+
+        const budgetResponse = await fetch(`${API_URL}/budgets`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        if (budgetResponse.ok) setBudgets(await budgetResponse.json());
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") return;
 
@@ -188,10 +246,19 @@ export default function ReportsPage() {
       return (
         date >= start &&
         date <= now &&
-        (category === "all" || transaction.category_name === category)
+        (category === "all" ||
+          transaction.type === "income" ||
+          transaction.category_name === category)
       );
     });
   }, [transactions, period, category]);
+
+  const exportBudgets =
+    category === "all"
+      ? budgets
+      : budgets.filter((b) => b.category_name === category);
+  const nothingToExport =
+    filteredTransactions.length === 0 && exportBudgets.length === 0;
 
   const income = filteredTransactions
     .filter((t) => t.type === "income")
@@ -529,33 +596,42 @@ export default function ReportsPage() {
             <section className="mt-7 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-lg font-bold">Export Reports</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Download the transactions and totals in the selected period
-                and category.
+                Download the transactions, totals and your budget summary for
+                the selected period and category.
               </p>
 
               <div className="mt-5 flex flex-wrap gap-4">
                 <button
+                  disabled={nothingToExport}
                   onClick={() =>
                     exportPDF(
                       income,
                       expenses,
                       balance,
                       filteredTransactions,
-                      period
+                      period,
+                      exportBudgets
                     )
                   }
-                  className="rounded-xl bg-indigo-600 px-5 py-3 text-white hover:bg-indigo-700"
+                  className="rounded-xl bg-indigo-600 px-5 py-3 text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Export PDF
                 </button>
 
                 <button
-                  onClick={() => exportCSV(filteredTransactions)}
-                  className="rounded-xl border border-slate-300 px-5 py-3 hover:bg-slate-100"
+                  disabled={nothingToExport}
+                  onClick={() => exportCSV(filteredTransactions, exportBudgets)}
+                  className="rounded-xl border border-slate-300 px-5 py-3 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Export CSV
                 </button>
               </div>
+
+              {nothingToExport && (
+                <p className="mt-3 text-sm text-slate-500">
+                  Nothing to export for this selection.
+                </p>
+              )}
             </section>
 
             <p className="mt-7 text-center text-xs text-slate-400">
